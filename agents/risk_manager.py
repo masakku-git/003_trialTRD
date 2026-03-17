@@ -124,6 +124,11 @@ def run_risk_management(client: anthropic.Anthropic, validated_signals: list[dic
     # スロット制限の強制チェック
     approved = approved[:available_slots]
 
+    # validated_signals の strategy_name を承認注文に引き継ぐ
+    strategy_map = {sig["symbol"]: sig.get("strategy_name", "") for sig in validated_signals}
+    for order in approved:
+        order["strategy_name"] = strategy_map.get(order["symbol"], "")
+
     logger.info(f"[risk] 承認: {[o['symbol'] for o in approved]}, "
                 f"却下: {[r['symbol'] for r in rejected]}")
     logger.info(f"[risk] 総評: {assessment}")

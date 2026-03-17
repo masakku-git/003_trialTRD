@@ -159,6 +159,10 @@ def _final_decision(client: anthropic.Anthropic,
             if text.startswith("json"):
                 text = text[4:]
         final = json.loads(text)
+        # LLMの出力に strategy_name がないため、承認済み注文から引き継ぐ
+        strategy_map = {o["symbol"]: o.get("strategy_name", "") for o in approved_orders}
+        for order in final:
+            order["strategy_name"] = strategy_map.get(order["symbol"], "")
         logger.info(f"[orchestrator] 最終承認: {[o['symbol'] for o in final]}")
         return final
     except Exception as e:

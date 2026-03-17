@@ -170,7 +170,7 @@ def run_backtest_validation(client: anthropic.Anthropic, signals: list[dict]) ->
         signal_type = _infer_signal_type(sig)
         bt = validate_signal(client, symbol, signal_type)
         if bt.get("viable", False) and bt.get("sample_cnt", 0) >= 5:
-            validated.append({**sig, "backtest": bt})
+            validated.append({**sig, "backtest": bt, "strategy_name": signal_type})
     logger.info(f"[backtest] バックテスト通過: {[v['symbol'] for v in validated]}")
     return validated
 

@@ -30,6 +30,7 @@ class TradeExecutor:
             stop_loss = order.get("stop_loss", 0.0)
             take_profit = order.get("take_profit", 0.0)
             reason = order.get("reason", "")
+            strategy_name = order.get("strategy_name", "")
 
             # DBに pending 注文を記録
             order_id = save_order(
@@ -42,6 +43,7 @@ class TradeExecutor:
                 take_profit=take_profit,
                 status="pending",
                 reason=reason,
+                strategy_name=strategy_name,
             )
 
             # moomooへ発注

@@ -23,6 +23,12 @@ def init_db():
     """全テーブルを作成（初回のみ）"""
     conn = get_conn()
     conn.executescript("""
+        CREATE TABLE IF NOT EXISTS strategies (
+            strategy_name   TEXT PRIMARY KEY,
+            description     TEXT,
+            created_at      TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS watchlist (
             symbol      TEXT PRIMARY KEY,
             name        TEXT,
@@ -62,25 +68,27 @@ def init_db():
         );
 
         CREATE TABLE IF NOT EXISTS orders (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            date        TEXT,
-            symbol      TEXT,
-            action      TEXT,
-            quantity    INTEGER,
-            price       REAL,
-            stop_loss   REAL,
-            take_profit REAL,
-            status      TEXT,
-            reason      TEXT
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            date            TEXT,
+            symbol          TEXT,
+            action          TEXT,
+            quantity        INTEGER,
+            price           REAL,
+            stop_loss       REAL,
+            take_profit     REAL,
+            status          TEXT,
+            reason          TEXT,
+            strategy_name   TEXT
         );
 
         CREATE TABLE IF NOT EXISTS positions (
-            symbol      TEXT PRIMARY KEY,
-            quantity    INTEGER,
-            avg_cost    REAL,
-            stop_loss   REAL,
-            take_profit REAL,
-            opened_at   TEXT
+            symbol          TEXT PRIMARY KEY,
+            quantity        INTEGER,
+            avg_cost        REAL,
+            stop_loss       REAL,
+            take_profit     REAL,
+            opened_at       TEXT,
+            strategy_name   TEXT
         );
 
         CREATE TABLE IF NOT EXISTS portfolio_snapshots (
@@ -90,9 +98,59 @@ def init_db():
             positions_json  TEXT
         );
     """)
+    # 既存DBへのカラム追加マイグレーション
+    for sql in [
+        "ALTER TABLE orders ADD COLUMN strategy_name TEXT",
+        "ALTER TABLE positions ADD COLUMN strategy_name TEXT",
+    ]:
+        try:
+            conn.execute(sql)
+        except Exception:
+            pass  # カラムが既に存在する場合はスキップ
     conn.commit()
+    # デフォルト戦略を登録
+    _seed_strategies(conn)
     conn.close()
     print(f"[db] initialized: {DB_PATH}")
+
+
+# ─── strategies ──────────────────────────────────────────────────────────────
+
+_DEFAULT_STRATEGIES = [
+    ("ma_cross",     "移動平均クロス戦略（MA5/MA20ゴールデンクロス）"),
+    ("rsi_oversold", "RSI売られすぎ戦略（RSI30割れからの反発）"),
+    ("breakout",     "ブレイクアウト戦略（20日高値更新突破）"),
+]
+
+
+def _seed_strategies(conn: sqlite3.Connection):
+    """デフォルト戦略をstrategiesテーブルに登録（重複スキップ）"""
+    today = date.today().isoformat()
+    for name, desc in _DEFAULT_STRATEGIES:
+        conn.execute(
+            "INSERT OR IGNORE INTO strategies (strategy_name, description, created_at) VALUES (?,?,?)",
+            (name, desc, today)
+        )
+    conn.commit()
+
+
+def register_strategy(strategy_name: str, description: str = ""):
+    """新しい戦略を登録する"""
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO strategies (strategy_name, description, created_at) VALUES (?,?,?)",
+        (strategy_name, description, date.today().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_strategies() -> list[dict]:
+    """登録済み戦略一覧を返す"""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM strategies ORDER BY created_at").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ─── watchlist ───────────────────────────────────────────────────────────────
@@ -235,13 +293,13 @@ def save_backtest_cache(symbol: str, signal_type: str,
 
 def save_order(date_str: str, symbol: str, action: str, quantity: int,
                price: float, stop_loss: float, take_profit: float,
-               status: str, reason: str) -> int:
+               status: str, reason: str, strategy_name: str = "") -> int:
     conn = get_conn()
     cur = conn.execute(
         """INSERT INTO orders
-           (date, symbol, action, quantity, price, stop_loss, take_profit, status, reason)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
-        (date_str, symbol, action, quantity, price, stop_loss, take_profit, status, reason)
+           (date, symbol, action, quantity, price, stop_loss, take_profit, status, reason, strategy_name)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (date_str, symbol, action, quantity, price, stop_loss, take_profit, status, reason, strategy_name)
     )
     order_id = cur.lastrowid
     conn.commit()
@@ -269,19 +327,22 @@ def get_orders(status: Optional[str] = None) -> list[dict]:
 # ─── positions ────────────────────────────────────────────────────────────────
 
 def upsert_position(symbol: str, quantity: int, avg_cost: float,
-                    stop_loss: float, take_profit: float):
+                    stop_loss: float, take_profit: float, strategy_name: str = ""):
     conn = get_conn()
     if quantity == 0:
         conn.execute("DELETE FROM positions WHERE symbol=?", (symbol,))
     else:
         conn.execute(
             """INSERT OR REPLACE INTO positions
-               (symbol, quantity, avg_cost, stop_loss, take_profit, opened_at)
+               (symbol, quantity, avg_cost, stop_loss, take_profit, opened_at, strategy_name)
                VALUES (?,?,?,?,?,COALESCE(
                    (SELECT opened_at FROM positions WHERE symbol=?), ?
+               ),COALESCE(
+                   NULLIF(?,''),(SELECT strategy_name FROM positions WHERE symbol=?),''
                ))""",
             (symbol, quantity, avg_cost, stop_loss, take_profit,
-             symbol, date.today().isoformat())
+             symbol, date.today().isoformat(),
+             strategy_name, symbol)
         )
     conn.commit()
     conn.close()

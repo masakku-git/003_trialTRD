@@ -36,6 +36,13 @@ SQLite を採用（シングルサーバで十分・運用シンプル）
 ### テーブル一覧
 
 ```sql
+-- 戦略マスタ（トレード戦略の名称・説明）
+CREATE TABLE strategies (
+    strategy_name   TEXT PRIMARY KEY,   -- 'ma_cross' / 'rsi_oversold' / 'breakout' など
+    description     TEXT,
+    created_at      TEXT
+);
+
 -- ウォッチリスト（スキャン対象銘柄マスタ）
 CREATE TABLE watchlist (
     symbol      TEXT PRIMARY KEY,
@@ -80,26 +87,28 @@ CREATE TABLE backtest_cache (
 
 -- 注文履歴
 CREATE TABLE orders (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    date        TEXT,
-    symbol      TEXT,
-    action      TEXT,           -- buy/sell
-    quantity    INTEGER,
-    price       REAL,
-    stop_loss   REAL,
-    take_profit REAL,
-    status      TEXT,           -- pending/executed/cancelled
-    reason      TEXT
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    date            TEXT,
+    symbol          TEXT,
+    action          TEXT,           -- buy/sell
+    quantity        INTEGER,
+    price           REAL,
+    stop_loss       REAL,
+    take_profit     REAL,
+    status          TEXT,           -- pending/executed/cancelled
+    reason          TEXT,
+    strategy_name   TEXT            -- 使用戦略名（strategies.strategy_name参照）
 );
 
 -- ポジション（現在保有）
 CREATE TABLE positions (
-    symbol      TEXT PRIMARY KEY,
-    quantity    INTEGER,
-    avg_cost    REAL,
-    stop_loss   REAL,
-    take_profit REAL,
-    opened_at   TEXT
+    symbol          TEXT PRIMARY KEY,
+    quantity        INTEGER,
+    avg_cost        REAL,
+    stop_loss       REAL,
+    take_profit     REAL,
+    opened_at       TEXT,
+    strategy_name   TEXT            -- 建値時の戦略名
 );
 
 -- 資金スナップショット（日次）

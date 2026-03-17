@@ -1,0 +1,25 @@
+{
+  "markets": ["TSE"],
+  "symbols": [
+    {"symbol": "7203.T", "name": "Toyota Motor", "market": "TSE"},
+    {"symbol": "6758.T", "name": "Sony Group", "market": "TSE"},
+    {"symbol": "9984.T", "name": "SoftBank Group", "market": "TSE"},
+    {"symbol": "6861.T", "name": "Keyence", "market": "TSE"},
+    {"symbol": "7974.T", "name": "Nintendo", "market": "TSE"},
+    {"symbol": "8306.T", "name": "Mitsubishi UFJ Financial", "market": "TSE"},
+    {"symbol": "6367.T", "name": "Daikin Industries", "market": "TSE"},
+    {"symbol": "4063.T", "name": "Shin-Etsu Chemical", "market": "TSE"},
+    {"symbol": "9432.T", "name": "NTT", "market": "TSE"},
+    {"symbol": "4519.T", "name": "Chugai Pharmaceutical", "market": "TSE"},
+    {"symbol": "6954.T", "name": "Fanuc", "market": "TSE"},
+    {"symbol": "8035.T", "name": "Tokyo Electron", "market": "TSE"},
+    {"symbol": "4502.T", "name": "Takeda Pharmaceutical", "market": "TSE"},
+    {"symbol": "9433.T", "name": "KDDI", "market": "TSE"},
+    {"symbol": "2413.T", "name": "M3", "market": "TSE"},
+    {"symbol": "4568.T", "name": "Daiichi Sankyo", "market": "TSE"},
+    {"symbol": "7267.T", "name": "Honda Motor", "market": "TSE"},
+    {"symbol": "6501.T", "name": "Hitachi", "market": "TSE"},
+    {"symbol": "4661.T", "name": "Oriental Land", "market": "TSE"},
+    {"symbol": "8001.T", "name": "Itochu Corporation", "market": "TSE"}
+  ]
+}

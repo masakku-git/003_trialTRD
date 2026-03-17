@@ -1,0 +1,20 @@
+# Futu OpenD systemd サービスファイル
+# コピー先: /etc/systemd/system/futu-opend.service
+# 有効化: systemctl enable futu-opend && systemctl start futu-opend
+
+[Unit]
+Description=Futu OpenD Trading Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=trading
+WorkingDirectory=/home/trading/futu
+ExecStart=/home/trading/futu/FutuOpenD -cfg_file /home/trading/futu/FutuOpenD.xml
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

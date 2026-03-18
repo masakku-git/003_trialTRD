@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Claude 自律売買システム")
+    parser = argparse.ArgumentParser(description="自律売買システム（ルールベース）")
     parser.add_argument("--dry-run", action="store_true",
                         help="注文を発行しない（ペーパートレードモード）")
     parser.add_argument("--init-db", action="store_true",
@@ -40,11 +40,6 @@ def main():
     parser.add_argument("--scan-only", action="store_true",
                         help="スキャンのみ実行（注文なし）")
     args = parser.parse_args()
-
-    # ANTHROPIC_API_KEY チェック
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        logger.error("ANTHROPIC_API_KEY が設定されていません。.env ファイルを確認してください。")
-        sys.exit(1)
 
     # DB初期化
     from tools.db import init_db, load_watchlist_to_db
@@ -70,9 +65,7 @@ def main():
 
     if args.scan_only:
         from agents.market_scanner import run_market_scanner
-        import anthropic
-        client = anthropic.Anthropic()
-        candidates = run_market_scanner(client)
+        candidates = run_market_scanner()
         print(json.dumps(candidates, ensure_ascii=False, indent=2))
         return
 

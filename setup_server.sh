@@ -31,7 +31,7 @@ sudo -u "${BOT_USER}" bash -c "
     python3 -m venv venv
     source venv/bin/activate
     pip install --upgrade pip
-    pip install anthropic yfinance pandas ta python-dotenv
+    pip install yfinance pandas ta python-dotenv
     # futu-apiはLinux対応を確認後インストール
     # pip install futu-api
 "

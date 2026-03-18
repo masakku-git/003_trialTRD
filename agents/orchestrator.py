@@ -1,12 +1,9 @@
 """
-Orchestrator Agent (claude-opus-4-6)
+Orchestrator（ルールベース）
 全エージェントを統括し、最終的なトレード判断を下す
 """
-import json
 import logging
 from datetime import date
-
-import anthropic
 
 from agents.market_scanner import run_market_scanner
 from agents.technical_analyst import run_technical_analysis
@@ -15,11 +12,8 @@ from agents.strategy_critic import run_strategy_critic
 from agents.risk_manager import run_risk_management
 from tools.executor import TradeExecutor
 from tools.futu_client import FutuClient
-from tools.db import get_positions, get_latest_snapshot
 
 logger = logging.getLogger(__name__)
-
-OPUS_MODEL = "claude-opus-4-6"
 
 
 def run_orchestrator(dry_run: bool = False):
@@ -27,16 +21,15 @@ def run_orchestrator(dry_run: bool = False):
     メインオーケストレーター実行
     dry_run=True の場合は注文を発行しない（ペーパートレード）
     """
-    client = anthropic.Anthropic()
     today = date.today().isoformat()
 
-    logger.info(f"=" * 60)
+    logger.info("=" * 60)
     logger.info(f"[orchestrator] 実行開始 {today} dry_run={dry_run}")
-    logger.info(f"=" * 60)
+    logger.info("=" * 60)
 
     # Step 1: MarketScanner — 軽量スクリーニング + 差分データ取得
     logger.info("[orchestrator] Step1: MarketScanner 実行")
-    candidates = run_market_scanner(client)
+    candidates = run_market_scanner()
 
     if not candidates:
         logger.info("[orchestrator] 候補銘柄なし。本日は終了。")
@@ -46,7 +39,7 @@ def run_orchestrator(dry_run: bool = False):
 
     # Step 2: TechnicalAnalyst — DBデータで分析
     logger.info("[orchestrator] Step2: TechnicalAnalyst 実行")
-    signals = run_technical_analysis(client, candidates)
+    signals = run_technical_analysis(candidates)
 
     if not signals:
         logger.info("[orchestrator] トレードシグナルなし。本日は終了。")
@@ -54,15 +47,15 @@ def run_orchestrator(dry_run: bool = False):
 
     # Step 3: BacktestValidator — DBキャッシュ優先で検証
     logger.info("[orchestrator] Step3: BacktestValidator 実行")
-    validated = run_backtest_validation(client, signals)
+    validated = run_backtest_validation(signals)
 
     if not validated:
         logger.info("[orchestrator] バックテスト通過シグナルなし。本日は終了。")
         return {"status": "no_validated_signals", "signals": signals, "orders": []}
 
-    # Step 3.5: StrategyCritic — 批判的審査（悪魔の代弁者）
+    # Step 3.5: StrategyCritic — 批判的審査（ヒューリスティック）
     logger.info("[orchestrator] Step3.5: StrategyCritic 実行")
-    survived = run_strategy_critic(client, validated)
+    survived = run_strategy_critic(validated)
 
     if not survived:
         logger.info("[orchestrator] 批判フィルタ通過シグナルなし。本日は終了。")
@@ -70,15 +63,15 @@ def run_orchestrator(dry_run: bool = False):
 
     # Step 4: RiskManager — ポートフォリオリスク評価
     logger.info("[orchestrator] Step4: RiskManager 実行")
-    approved_orders = run_risk_management(client, survived)
+    approved_orders = run_risk_management(survived)
 
     if not approved_orders:
         logger.info("[orchestrator] 承認注文なし。本日は終了。")
         return {"status": "no_approved_orders", "survived": survived, "orders": []}
 
-    # Step 5: Orchestrator最終判断
+    # Step 5: 最終フィルタ（ルールベース）
     logger.info("[orchestrator] Step5: 最終判断")
-    final_orders = _final_decision(client, approved_orders, candidates, signals, survived)
+    final_orders = _final_decision(approved_orders, survived)
 
     # Step 6: 実行
     futu = FutuClient()
@@ -93,7 +86,7 @@ def run_orchestrator(dry_run: bool = False):
         finally:
             futu.disconnect()
     else:
-        logger.info(f"[orchestrator] DRY RUN: 以下の注文を発行予定:")
+        logger.info("[orchestrator] DRY RUN: 以下の注文を発行予定:")
         for o in final_orders:
             logger.info(f"  {o['symbol']} {o['action']} {o['quantity']}株 @{o['price']}")
         results = [{**o, "status": "dry_run"} for o in final_orders]
@@ -114,80 +107,28 @@ def run_orchestrator(dry_run: bool = False):
     }
 
 
-def _final_decision(client: anthropic.Anthropic,
-                    approved_orders: list[dict],
-                    candidates: list[dict],
-                    signals: list[dict],
+def _final_decision(approved_orders: list[dict],
                     survived: list[dict]) -> list[dict]:
     """
-    Orchestratorが最終的にOpusモデルで判断
-    リスクマネージャーが承認した注文に対して最終GoサインをつけるOR削減する
-    StrategyCriticの批判情報も考慮に入れる
+    最終フィルタ（ルールベース）
+    StrategyCriticの批判情報を考慮し、criticality_scoreが高い銘柄を優先度下げ
     """
     if len(approved_orders) <= 1:
         return approved_orders
 
-    # StrategyCriticの批判情報をシンボルでマップ化
+    # StrategyCriticの批判情報でソート（criticality_scoreが低い＝問題少ない順）
     criticism_map = {
         s["symbol"]: s.get("criticism", {})
         for s in survived
     }
-    orders_with_criticism = []
-    for order in approved_orders:
-        sym = order["symbol"]
-        crit = criticism_map.get(sym, {})
-        orders_with_criticism.append({
-            **order,
-            "criticality_score": crit.get("criticality_score", 0),
-            "red_flags": crit.get("red_flags", []),
-            "critic_verdict": crit.get("verdict", "approve"),
-        })
 
-    prompt = f"""本日({date.today().isoformat()})の自律売買システムの最終判断をお願いします。
+    def sort_key(order):
+        crit = criticism_map.get(order["symbol"], {})
+        criticality = crit.get("criticality_score", 0)
+        # criticality_scoreが低い（良い）ものを優先
+        return criticality
 
-リスクマネージャーが承認し、StrategyCriticの審査を通過した注文候補:
-{json.dumps(orders_with_criticism, ensure_ascii=False, indent=2)}
+    sorted_orders = sorted(approved_orders, key=sort_key)
 
-市場スキャンスコア:
-{json.dumps([{"symbol": c["symbol"], "score": c["score"]} for c in candidates], ensure_ascii=False, indent=2)}
-
-以下の観点で最終確認してください:
-1. 市場全体の状況（複数銘柄が同方向に動いている場合、単一セクター集中リスク）
-2. 注文間の相関・集中リスク
-3. StrategyCriticが指摘したred_flagsの深刻度（criticality_scoreが高い銘柄は要注意）
-4. 本日の実行推奨度（全実行/一部/見送り）
-
-最終的に実行する注文のみをJSON形式で返してください（他のテキスト不要）:
-[
-  {{
-    "symbol": "銘柄コード",
-    "action": "buy" | "sell",
-    "quantity": 株数,
-    "price": 価格,
-    "stop_loss": ストップロス,
-    "take_profit": 利確,
-    "reason": "最終承認理由"
-  }}
-]
-"""
-    try:
-        response = client.messages.create(
-            model=OPUS_MODEL,
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        final = json.loads(text)
-        # LLMの出力に strategy_name がないため、承認済み注文から引き継ぐ
-        strategy_map = {o["symbol"]: o.get("strategy_name", "") for o in approved_orders}
-        for order in final:
-            order["strategy_name"] = strategy_map.get(order["symbol"], "")
-        logger.info(f"[orchestrator] 最終承認: {[o['symbol'] for o in final]}")
-        return final
-    except Exception as e:
-        logger.error(f"[orchestrator] 最終判断失敗 ({e})、リスクマネージャー承認結果をそのまま使用")
-        return approved_orders
+    logger.info(f"[orchestrator] 最終承認: {[o['symbol'] for o in sorted_orders]}")
+    return sorted_orders

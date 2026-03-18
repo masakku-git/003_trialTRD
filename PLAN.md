@@ -1,7 +1,8 @@
-# Plan: Claude マルチエージェント自律売買システム（DB差分取得設計）
+# Plan: ルールベース自律売買システム（DB差分取得設計）
 
 ## Context
-Hetzner (Ubuntu) + moomoo証券(Futu OpenD) + Claude APIによる自律売買システム。
+Hetzner (Ubuntu) + moomoo証券(Futu OpenD) によるルールベース自律売買システム。
+**APIキー不要**（Claude Code Proで戦略開発、日次運用はアルゴリズムで自動実行）。
 **毎回全データを取得せず、DBに差分のみ蓄積**し、スクリーニング済み候補のデータだけを
 必要なタイミングで取得・補完する設計にする。
 
@@ -122,43 +123,43 @@ CREATE TABLE portfolio_snapshots (
 
 ---
 
-## マルチエージェント全体フロー（DB対応版）
+## 全体フロー（ルールベース・DB対応版）
 
 ```
 cron (毎営業日 08:45 JST)
         │
         ▼
 ┌──────────────────────────────────────────────────────────┐
-│  Orchestrator Agent (claude-opus-4-6)                     │
+│  Orchestrator（ルールベース統括）                          │
 └────┬──────────────────────────────────────────────────────┘
      │
      ▼ Step 1
-MarketScanner (Haiku)
-  ├─ 全銘柄スキャン（軽量：前日比・出来高のみ）
-  ├─ 候補3〜5銘柄を選定
+MarketScanner（ルールベース）
+  ├─ 全銘柄スキャン（変化率・出来高でスコアリング）
+  ├─ 上位3〜5銘柄を選定
   └─ DB確認 → 差分データのみ取得・保存
      │
      ▼ Step 2
-TechnicalAnalyst (Haiku)
-  └─ MA/RSI/MACD/BB計算 → シグナル生成（DBのみ使用）
+TechnicalAnalyst（戦略パターン）
+  └─ 全戦略のgenerate_signal() → 最良シグナル選定（DBのみ使用）
      │
      ▼ Step 3
-BacktestValidator (Haiku)
-  └─ 勝率・RR・DDを算出（DBキャッシュ7日間優先）
+BacktestValidator（ルールベース）
+  └─ 勝率≥40% / RR≥0.3 / サンプル≥5（DBキャッシュ7日間優先）
      │
-     ▼ Step 3.5 ★NEW
-StrategyCritic (Sonnet)  ← 悪魔の代弁者
+     ▼ Step 3.5
+StrategyCritic（ヒューリスティック）← 悪魔の代弁者
   ├─ approve → そのまま通過
   ├─ caution → 信頼度を0.7倍に減衰して通過
   └─ reject  → 除外（重大な欠陥ありと判定）
      │
      ▼ Step 4
-RiskManager (Sonnet)
-  └─ ポジションサイズ決定・ポートフォリオリスク評価
+RiskManager（ルールベース）
+  └─ RR≥1.5 / ポジションサイズ計算 / スロット・キャッシュチェック
      │
      ▼ Step 5
-Orchestrator 最終判断 (Opus)
-  └─ StrategyCriticのred_flagsを考慮した最終Go/No-Go
+Orchestrator 最終判断（ルールベース）
+  └─ criticality_scoreで優先順位付け
      │
      ▼
 Trade Executor
@@ -257,7 +258,7 @@ def fetch_prices_incremental(symbol: str, lookback_days: int = 90):
 1. CX22 + Ubuntu 24.04 でサーバ作成
 2. 初期設定: SSHユーザ・ufw・rootログイン無効化・JST設定
 3. Futu OpenD インストール + systemdサービス化
-4. Python環境: `venv` + `pip install anthropic futu-api yfinance pandas ta python-dotenv`
+4. Python環境: `venv` + `pip install futu-api yfinance pandas ta python-dotenv`
 5. GitHubからコードデプロイ
 6. `python -c "from tools.db import init_db; init_db()"` でDB初期化
 7. cron設定
@@ -268,16 +269,20 @@ def fetch_prices_incremental(symbol: str, lookback_days: int = 90):
 
 ---
 
-## モデル選定とコスト試算
+## 実行方式
 
-| エージェント | モデル | 役割 |
-|------------|-------|------|
-| Orchestrator | claude-opus-4-6 | 統括・最終判断 |
-| StrategyCritic | claude-sonnet-4-6 | 戦略の批判的審査（悪魔の代弁者）★NEW |
-| RiskManager | claude-sonnet-4-6 | リスク評価・ポジションサイズ決定 |
-| MarketScanner / TechnicalAnalyst / BacktestValidator | claude-haiku-4-5 | 軽量処理 |
+**ルールベース（APIキー不要）** — Claude Code Proで戦略を開発・改善し、日次運用はアルゴリズムで自動実行。
 
-1日1回実行 → 推定 **$0.05〜$0.15/日**
+| モジュール | 方式 | 役割 |
+|------------|------|------|
+| Orchestrator | ルールベース | 統括・最終判断（criticality_scoreでソート） |
+| StrategyCritic | ヒューリスティック | 戦略の弱点検出（統計・指標矛盾チェック） |
+| RiskManager | ルールベース | ポジションサイズ計算・RR比/勝率フィルタ |
+| MarketScanner | ルールベース | 変化率・出来高でスコアリング |
+| TechnicalAnalyst | 戦略パターン | 全戦略のgenerate_signal()から最良選定 |
+| BacktestValidator | ルールベース | 勝率/RR/サンプル数で通過判定 |
+
+**ランニングコスト: API利用料なし**（yfinanceの市場データ取得のみ）
 
 ---
 
@@ -348,7 +353,7 @@ def fetch_prices_incremental(symbol: str, lookback_days: int = 90):
 
   # 2. .envを作成
   cp .env.example .env
-  # → ANTHROPIC_API_KEY等を編集
+  # → FUTU_TRADE_PWD, FUTU_ACCOUNT_ID等を編集
 
   # 3. DB初期化
   python main.py --init-db

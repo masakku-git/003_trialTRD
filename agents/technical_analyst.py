@@ -1,17 +1,15 @@
 """
-TechnicalAnalyst Agent (claude-haiku-4-5)
+TechnicalAnalyst（ルールベース）
 DBのOHLCVデータでテクニカル分析を行いシグナルを生成する
 API再取得は行わない（DBのみ使用）
 
 各戦略ファイル（strategies/）の generate_signal() を使用し、
 全登録戦略を銘柄ごとに試して最良のシグナルを選ぶ。
 """
-import json
 import logging
 from datetime import date, timedelta
 from typing import Optional
 
-import anthropic
 import pandas as pd
 
 from strategies import StrategyRegistry
@@ -19,11 +17,9 @@ from tools.db import get_prices
 
 logger = logging.getLogger(__name__)
 
-HAIKU_MODEL = "claude-haiku-4-5-20251001"
-
 
 def _compute_indicators(df: pd.DataFrame) -> dict:
-    """基本テクニカル指標を計算して辞書で返す（LLMコンテキスト用）"""
+    """基本テクニカル指標を計算して辞書で返す"""
     if len(df) < 20:
         return {}
 
@@ -75,7 +71,7 @@ def _compute_indicators(df: pd.DataFrame) -> dict:
     }
 
 
-def analyze_symbol(client: anthropic.Anthropic, symbol: str, name: str = "") -> Optional[dict]:
+def analyze_symbol(symbol: str, name: str = "") -> Optional[dict]:
     """
     単一銘柄のテクニカル分析を実行。
     全登録戦略の generate_signal() を試し、最も信頼度の高いシグナルを採用する。
@@ -128,7 +124,7 @@ def analyze_symbol(client: anthropic.Anthropic, symbol: str, name: str = "") -> 
     return best
 
 
-def run_technical_analysis(client: anthropic.Anthropic, candidates: list[dict]) -> list[dict]:
+def run_technical_analysis(candidates: list[dict]) -> list[dict]:
     """
     候補銘柄リストに対してテクニカル分析を実行
     Returns: シグナルありの銘柄リスト
@@ -140,7 +136,7 @@ def run_technical_analysis(client: anthropic.Anthropic, candidates: list[dict]) 
     signals = []
     for c in candidates:
         symbol = c["symbol"]
-        result = analyze_symbol(client, symbol)
+        result = analyze_symbol(symbol)
         if result and result.get("signal") != "hold":
             signals.append(result)
     logger.info(f"[analyst] シグナル銘柄: {[s['symbol'] for s in signals]}")

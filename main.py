@@ -39,6 +39,8 @@ def main():
                         help="DBを初期化してウォッチリストを同期する")
     parser.add_argument("--scan-only", action="store_true",
                         help="スキャンのみ実行（注文なし）")
+    parser.add_argument("--research-only", action="store_true",
+                        help="マクロ市場分析のみ実行（MarketResearcher単体テスト）")
     args = parser.parse_args()
 
     # DB初期化
@@ -62,6 +64,12 @@ def main():
         str(Path(__file__).parent / "data" / "watchlist.json")
     )
     load_watchlist_to_db(watchlist_path)
+
+    if args.research_only:
+        from agents.market_researcher import run_market_researcher
+        context = run_market_researcher()
+        print(json.dumps(context, ensure_ascii=False, indent=2, default=str))
+        return
 
     if args.scan_only:
         from agents.market_scanner import run_market_scanner

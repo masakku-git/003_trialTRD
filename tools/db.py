@@ -97,6 +97,15 @@ def init_db():
             total_value     REAL,
             positions_json  TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS market_context (
+            date            TEXT PRIMARY KEY,
+            regime          TEXT,
+            confidence      REAL,
+            regime_score    REAL,
+            context_json    TEXT,
+            computed_at     TEXT
+        );
     """)
     # 既存DBへのカラム追加マイグレーション
     for sql in [
@@ -376,3 +385,33 @@ def get_latest_snapshot() -> Optional[dict]:
     d = dict(row)
     d["positions"] = json.loads(d["positions_json"])
     return d
+
+
+# ─── market_context ──────────────────────────────────────────────────────────
+
+def save_market_context(date_str: str, regime: str, confidence: float,
+                        regime_score: float, context: dict):
+    """MarketResearcherの分析結果を保存"""
+    conn = get_conn()
+    conn.execute(
+        """INSERT OR REPLACE INTO market_context
+           (date, regime, confidence, regime_score, context_json, computed_at)
+           VALUES (?,?,?,?,?,?)""",
+        (date_str, regime, confidence, regime_score,
+         json.dumps(context, ensure_ascii=False, default=str),
+         date.today().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_market_context(date_str: str) -> Optional[dict]:
+    """当日のMarketContextキャッシュを返す。なければNone"""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM market_context WHERE date=?", (date_str,)
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return json.loads(row["context_json"])

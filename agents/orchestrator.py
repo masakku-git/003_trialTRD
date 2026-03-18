@@ -5,6 +5,7 @@ Orchestrator（ルールベース）
 import logging
 from datetime import date
 
+from agents.market_researcher import run_market_researcher
 from agents.market_scanner import run_market_scanner
 from agents.technical_analyst import run_technical_analysis
 from agents.backtest_validator import run_backtest_validation
@@ -26,6 +27,19 @@ def run_orchestrator(dry_run: bool = False):
     logger.info("=" * 60)
     logger.info(f"[orchestrator] 実行開始 {today} dry_run={dry_run}")
     logger.info("=" * 60)
+
+    # Step 0: MarketResearcher — マクロ市場分析
+    logger.info("[orchestrator] Step0: MarketResearcher 実行")
+    market_context = run_market_researcher()
+    regime = market_context.get("regime", "UNCERTAIN")
+    regime_score = market_context.get("regime_score", 0)
+    logger.info(f"[orchestrator] 市場レジーム: {regime} (score={regime_score:.3f})")
+
+    # 取引ゲートチェック
+    gate = market_context.get("trading_gate", {})
+    if not gate.get("allow_trading", True):
+        logger.info(f"[orchestrator] 取引停止: {gate.get('reason', '市場環境が悪い')}")
+        return {"status": "trading_halted", "regime": regime, "orders": []}
 
     # Step 1: MarketScanner — 軽量スクリーニング + 差分データ取得
     logger.info("[orchestrator] Step1: MarketScanner 実行")
@@ -63,7 +77,7 @@ def run_orchestrator(dry_run: bool = False):
 
     # Step 4: RiskManager — ポートフォリオリスク評価
     logger.info("[orchestrator] Step4: RiskManager 実行")
-    approved_orders = run_risk_management(survived)
+    approved_orders = run_risk_management(survived, market_context=market_context)
 
     if not approved_orders:
         logger.info("[orchestrator] 承認注文なし。本日は終了。")
@@ -99,6 +113,8 @@ def run_orchestrator(dry_run: bool = False):
     return {
         "status": "completed",
         "date": today,
+        "regime": regime,
+        "regime_score": regime_score,
         "candidates": [c["symbol"] for c in candidates],
         "signals": [s["symbol"] for s in signals],
         "validated": [v["symbol"] for v in validated],

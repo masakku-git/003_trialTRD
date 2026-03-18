@@ -20,13 +20,40 @@ MIN_BACKTEST_WIN_RATE = 0.40
 MIN_BACKTEST_SAMPLE = 10
 
 
-def run_risk_management(validated_signals: list[dict]) -> list[dict]:
+def run_risk_management(validated_signals: list[dict],
+                        market_context: dict = None) -> list[dict]:
     """
     バックテスト通過済みシグナルにリスク管理フィルタを適用
+    market_context: MarketResearcherの分析結果（ポジションサイズ調整・戦略ブロック）
     Returns: 実行可能な注文リスト
     """
     if not validated_signals:
         return []
+
+    # MarketContext によるブロック戦略フィルタ
+    blocked_strategies = []
+    size_multiplier = 1.0
+    if market_context:
+        gate = market_context.get("trading_gate", {})
+        blocked_strategies = gate.get("blocked_strategies", [])
+        size_multiplier = gate.get("position_size_multiplier", 1.0)
+        logger.info(f"[risk] MarketContext: multiplier={size_multiplier}, "
+                    f"blocked={blocked_strategies}")
+
+    if "all" in blocked_strategies:
+        logger.info("[risk] 全戦略ブロック — 注文なし")
+        return []
+
+    # ブロック対象戦略を事前フィルタ
+    if blocked_strategies:
+        before_count = len(validated_signals)
+        validated_signals = [
+            s for s in validated_signals
+            if s.get("strategy_name", "") not in blocked_strategies
+        ]
+        filtered = before_count - len(validated_signals)
+        if filtered:
+            logger.info(f"[risk] 戦略ブロックで{filtered}件除外")
 
     # 現在のポートフォリオ状態をDBから取得
     positions = get_positions()
@@ -89,6 +116,9 @@ def run_risk_management(validated_signals: list[dict]) -> list[dict]:
         else:
             # SL未設定の場合、MAX_POSITION_SIZE / エントリー価格で概算
             quantity = int(math.floor(MAX_POSITION_SIZE / entry_price)) if entry_price else 0
+
+        # MarketContextによるサイズ調整
+        quantity = int(math.floor(quantity * size_multiplier))
 
         # ポジションサイズ上限チェック
         position_value = quantity * entry_price if entry_price else 0

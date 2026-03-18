@@ -11,6 +11,7 @@ import anthropic
 from agents.market_scanner import run_market_scanner
 from agents.technical_analyst import run_technical_analysis
 from agents.backtest_validator import run_backtest_validation
+from agents.strategy_critic import run_strategy_critic
 from agents.risk_manager import run_risk_management
 from tools.executor import TradeExecutor
 from tools.futu_client import FutuClient
@@ -59,17 +60,25 @@ def run_orchestrator(dry_run: bool = False):
         logger.info("[orchestrator] バックテスト通過シグナルなし。本日は終了。")
         return {"status": "no_validated_signals", "signals": signals, "orders": []}
 
+    # Step 3.5: StrategyCritic — 批判的審査（悪魔の代弁者）
+    logger.info("[orchestrator] Step3.5: StrategyCritic 実行")
+    survived = run_strategy_critic(client, validated)
+
+    if not survived:
+        logger.info("[orchestrator] 批判フィルタ通過シグナルなし。本日は終了。")
+        return {"status": "no_survived_signals", "validated": validated, "orders": []}
+
     # Step 4: RiskManager — ポートフォリオリスク評価
     logger.info("[orchestrator] Step4: RiskManager 実行")
-    approved_orders = run_risk_management(client, validated)
+    approved_orders = run_risk_management(client, survived)
 
     if not approved_orders:
         logger.info("[orchestrator] 承認注文なし。本日は終了。")
-        return {"status": "no_approved_orders", "validated": validated, "orders": []}
+        return {"status": "no_approved_orders", "survived": survived, "orders": []}
 
     # Step 5: Orchestrator最終判断
     logger.info("[orchestrator] Step5: 最終判断")
-    final_orders = _final_decision(client, approved_orders, candidates, signals)
+    final_orders = _final_decision(client, approved_orders, candidates, signals, survived)
 
     # Step 6: 実行
     futu = FutuClient()
@@ -100,6 +109,7 @@ def run_orchestrator(dry_run: bool = False):
         "candidates": [c["symbol"] for c in candidates],
         "signals": [s["symbol"] for s in signals],
         "validated": [v["symbol"] for v in validated],
+        "survived_critic": [s["symbol"] for s in survived],
         "orders": results,
     }
 
@@ -107,32 +117,45 @@ def run_orchestrator(dry_run: bool = False):
 def _final_decision(client: anthropic.Anthropic,
                     approved_orders: list[dict],
                     candidates: list[dict],
-                    signals: list[dict]) -> list[dict]:
+                    signals: list[dict],
+                    survived: list[dict]) -> list[dict]:
     """
     Orchestratorが最終的にOpusモデルで判断
     リスクマネージャーが承認した注文に対して最終GoサインをつけるOR削減する
+    StrategyCriticの批判情報も考慮に入れる
     """
     if len(approved_orders) <= 1:
         return approved_orders
 
-    context = {
-        "today": date.today().isoformat(),
-        "approved_orders": approved_orders,
-        "candidate_scores": [{"symbol": c["symbol"], "score": c["score"]} for c in candidates],
+    # StrategyCriticの批判情報をシンボルでマップ化
+    criticism_map = {
+        s["symbol"]: s.get("criticism", {})
+        for s in survived
     }
+    orders_with_criticism = []
+    for order in approved_orders:
+        sym = order["symbol"]
+        crit = criticism_map.get(sym, {})
+        orders_with_criticism.append({
+            **order,
+            "criticality_score": crit.get("criticality_score", 0),
+            "red_flags": crit.get("red_flags", []),
+            "critic_verdict": crit.get("verdict", "approve"),
+        })
 
     prompt = f"""本日({date.today().isoformat()})の自律売買システムの最終判断をお願いします。
 
-リスクマネージャーが承認した注文候補:
-{json.dumps(approved_orders, ensure_ascii=False, indent=2)}
+リスクマネージャーが承認し、StrategyCriticの審査を通過した注文候補:
+{json.dumps(orders_with_criticism, ensure_ascii=False, indent=2)}
 
 市場スキャンスコア:
-{json.dumps(context['candidate_scores'], ensure_ascii=False, indent=2)}
+{json.dumps([{"symbol": c["symbol"], "score": c["score"]} for c in candidates], ensure_ascii=False, indent=2)}
 
 以下の観点で最終確認してください:
 1. 市場全体の状況（複数銘柄が同方向に動いている場合、単一セクター集中リスク）
 2. 注文間の相関・集中リスク
-3. 本日の実行推奨度（全実行/一部/見送り）
+3. StrategyCriticが指摘したred_flagsの深刻度（criticality_scoreが高い銘柄は要注意）
+4. 本日の実行推奨度（全実行/一部/見送り）
 
 最終的に実行する注文のみをJSON形式で返してください（他のテキスト不要）:
 [

@@ -116,22 +116,20 @@ def init_db():
 
 # ─── strategies ──────────────────────────────────────────────────────────────
 
-_DEFAULT_STRATEGIES = [
-    ("ma_cross",     "移動平均クロス戦略（MA5/MA20ゴールデンクロス）"),
-    ("rsi_oversold", "RSI売られすぎ戦略（RSI30割れからの反発）"),
-    ("breakout",     "ブレイクアウト戦略（20日高値更新突破）"),
-]
-
-
 def _seed_strategies(conn: sqlite3.Connection):
-    """デフォルト戦略をstrategiesテーブルに登録（重複スキップ）"""
-    today = date.today().isoformat()
-    for name, desc in _DEFAULT_STRATEGIES:
-        conn.execute(
-            "INSERT OR IGNORE INTO strategies (strategy_name, description, created_at) VALUES (?,?,?)",
-            (name, desc, today)
-        )
-    conn.commit()
+    """戦略レジストリから全登録戦略をDBに同期（重複スキップ）"""
+    try:
+        from strategies import StrategyRegistry
+        StrategyRegistry.discover()
+        today = date.today().isoformat()
+        for name, strategy in StrategyRegistry.get_all().items():
+            conn.execute(
+                "INSERT OR IGNORE INTO strategies (strategy_name, description, created_at) VALUES (?,?,?)",
+                (name, strategy.description, today)
+            )
+        conn.commit()
+    except ImportError:
+        pass  # strategies モジュールが利用できない場合はスキップ
 
 
 def register_strategy(strategy_name: str, description: str = ""):

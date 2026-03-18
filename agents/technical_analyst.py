@@ -2,6 +2,9 @@
 TechnicalAnalyst Agent (claude-haiku-4-5)
 DBのOHLCVデータでテクニカル分析を行いシグナルを生成する
 API再取得は行わない（DBのみ使用）
+
+各戦略ファイル（strategies/）の generate_signal() を使用し、
+全登録戦略を銘柄ごとに試して最良のシグナルを選ぶ。
 """
 import json
 import logging
@@ -11,6 +14,7 @@ from typing import Optional
 import anthropic
 import pandas as pd
 
+from strategies import StrategyRegistry
 from tools.db import get_prices
 
 logger = logging.getLogger(__name__)
@@ -19,7 +23,7 @@ HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 
 def _compute_indicators(df: pd.DataFrame) -> dict:
-    """基本テクニカル指標を計算して辞書で返す"""
+    """基本テクニカル指標を計算して辞書で返す（LLMコンテキスト用）"""
     if len(df) < 20:
         return {}
 
@@ -73,8 +77,8 @@ def _compute_indicators(df: pd.DataFrame) -> dict:
 
 def analyze_symbol(client: anthropic.Anthropic, symbol: str, name: str = "") -> Optional[dict]:
     """
-    単一銘柄のテクニカル分析を実行
-    Returns: {"symbol", "signal", "confidence", "entry_price", "stop_loss", "take_profit", "reasoning"}
+    単一銘柄のテクニカル分析を実行。
+    全登録戦略の generate_signal() を試し、最も信頼度の高いシグナルを採用する。
     """
     start = (date.today() - timedelta(days=120)).isoformat()
     df = get_prices(symbol, start=start)
@@ -87,55 +91,41 @@ def analyze_symbol(client: anthropic.Anthropic, symbol: str, name: str = "") -> 
     if not indicators:
         return None
 
-    # 直近5日の価格推移をサマリ
-    recent = df.tail(5)[["Close", "Volume"]].to_string()
+    # 全戦略を試してシグナルを収集
+    all_strategies = StrategyRegistry.get_all()
+    candidates = []
 
-    prompt = f"""銘柄: {symbol} {name}
-本日: {date.today().isoformat()}
+    for strategy_name, strategy in all_strategies.items():
+        try:
+            signal = strategy.generate_signal(df)
+            if signal and signal.get("signal") != "hold":
+                signal["strategy_name"] = strategy_name
+                candidates.append(signal)
+                logger.info(
+                    f"[analyst] {symbol}: 戦略'{strategy_name}' → "
+                    f"{signal['signal']} (confidence={signal['confidence']})"
+                )
+        except Exception as e:
+            logger.error(f"[analyst] {symbol}: 戦略'{strategy_name}' 実行失敗 - {e}")
 
-【テクニカル指標】
-{json.dumps(indicators, ensure_ascii=False, indent=2)}
-
-【直近5日の価格・出来高】
-{recent}
-
-以上を分析し、本日のトレードシグナルを判定してください。
-考慮事項:
-- トレンドの方向性（MA5/MA20/MA60の並び）
-- RSIによる過買い・過売り判定（70以上=過買い, 30以下=過売り）
-- MACDのゴールデン/デッドクロス
-- ボリンジャーバンドの位置
-- 出来高の増減
-
-必ず以下のJSON形式のみで回答（他のテキスト不要）：
-{{
-  "signal": "buy" | "sell" | "hold",
-  "confidence": 0.0〜1.0,
-  "entry_price": 数値,
-  "stop_loss": 数値,
-  "take_profit": 数値,
-  "reasoning": "根拠（日本語100字以内）"
-}}
-"""
-    try:
-        response = client.messages.create(
-            model=HAIKU_MODEL,
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        result = json.loads(text)
-        result["symbol"] = symbol
-        result["indicators"] = indicators
-        logger.info(f"[analyst] {symbol}: signal={result['signal']} confidence={result['confidence']}")
-        return result
-    except Exception as e:
-        logger.error(f"[analyst] {symbol}: 分析失敗 - {e}")
+    if not candidates:
+        logger.info(f"[analyst] {symbol}: 全戦略でシグナルなし")
         return None
+
+    # 最も信頼度の高いシグナルを採用
+    best = max(candidates, key=lambda s: s.get("confidence", 0))
+    best["symbol"] = symbol
+    best["indicators"] = indicators
+    best["all_strategy_signals"] = [
+        {"strategy": c["strategy_name"], "signal": c["signal"], "confidence": c["confidence"]}
+        for c in candidates
+    ]
+
+    logger.info(
+        f"[analyst] {symbol}: 採用戦略='{best['strategy_name']}' "
+        f"signal={best['signal']} confidence={best['confidence']}"
+    )
+    return best
 
 
 def run_technical_analysis(client: anthropic.Anthropic, candidates: list[dict]) -> list[dict]:
@@ -143,6 +133,10 @@ def run_technical_analysis(client: anthropic.Anthropic, candidates: list[dict]) 
     候補銘柄リストに対してテクニカル分析を実行
     Returns: シグナルありの銘柄リスト
     """
+    # 戦略モジュールを自動検出・ロード
+    StrategyRegistry.discover()
+    logger.info(f"[analyst] 登録戦略: {StrategyRegistry.list_names()}")
+
     signals = []
     for c in candidates:
         symbol = c["symbol"]

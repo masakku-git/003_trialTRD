@@ -128,24 +128,41 @@ CREATE TABLE portfolio_snapshots (
 cron (毎営業日 08:45 JST)
         │
         ▼
-┌─────────────────────────────────────────────────────┐
-│  Orchestrator Agent (claude-opus-4-6)                │
-└────┬──────────┬──────────┬──────────┬───────────────┘
-     │          │          │          │
-     ▼          ▼          ▼          ▼
-MarketScanner  TechnicalAnalyst  RiskManager  BacktestValidator
-(Haiku)        (Haiku)           (Sonnet)     (Haiku)
+┌──────────────────────────────────────────────────────────┐
+│  Orchestrator Agent (claude-opus-4-6)                     │
+└────┬──────────────────────────────────────────────────────┘
      │
-     ├─ 全銘柄スキャン（軽量：前日比・出来高のみ）
-     ├─ 候補3〜5銘柄を選定
-     └─ DB確認 → 差分データのみ取得・保存
-
-                     ↓ 候補銘柄 + DBのデータを使って分析
-                     ↓ （APIの再取得なし）
-
-                                                 ▼
-                                          Trade Executor
-                                          futu-api → moomoo
+     ▼ Step 1
+MarketScanner (Haiku)
+  ├─ 全銘柄スキャン（軽量：前日比・出来高のみ）
+  ├─ 候補3〜5銘柄を選定
+  └─ DB確認 → 差分データのみ取得・保存
+     │
+     ▼ Step 2
+TechnicalAnalyst (Haiku)
+  └─ MA/RSI/MACD/BB計算 → シグナル生成（DBのみ使用）
+     │
+     ▼ Step 3
+BacktestValidator (Haiku)
+  └─ 勝率・RR・DDを算出（DBキャッシュ7日間優先）
+     │
+     ▼ Step 3.5 ★NEW
+StrategyCritic (Sonnet)  ← 悪魔の代弁者
+  ├─ approve → そのまま通過
+  ├─ caution → 信頼度を0.7倍に減衰して通過
+  └─ reject  → 除外（重大な欠陥ありと判定）
+     │
+     ▼ Step 4
+RiskManager (Sonnet)
+  └─ ポジションサイズ決定・ポートフォリオリスク評価
+     │
+     ▼ Step 5
+Orchestrator 最終判断 (Opus)
+  └─ StrategyCriticのred_flagsを考慮した最終Go/No-Go
+     │
+     ▼
+Trade Executor
+  futu-api → moomoo
 ```
 
 ---
@@ -159,9 +176,17 @@ MarketScanner  TechnicalAnalyst  RiskManager  BacktestValidator
   ├─ agents/
   │   ├─ orchestrator.py
   │   ├─ market_scanner.py
-  │   ├─ technical_analyst.py
-  │   ├─ risk_manager.py
-  │   └─ backtest_validator.py
+  │   ├─ technical_analyst.py     # 全戦略を試して最良シグナルを選定
+  │   ├─ backtest_validator.py    # 戦略ファイルのbacktest()を使用
+  │   ├─ strategy_critic.py
+  │   └─ risk_manager.py
+  ├─ strategies/                  # ★ 戦略パターン（Strategy Pattern）
+  │   ├─ __init__.py              # BaseStrategy / StrategyRegistry 公開
+  │   ├─ base.py                  # 基底クラス・共通ヘルパー・自動レジストリ
+  │   ├─ ma_cross.py              # 移動平均クロス戦略
+  │   ├─ rsi_oversold.py          # RSI売られすぎ戦略
+  │   ├─ breakout.py              # ブレイクアウト戦略
+  │   └─ (新戦略.py)              # ← ファイル追加のみで新戦略を導入可能
   ├─ tools/
   │   ├─ db.py                   # DB操作（SQLiteラッパー）
   │   ├─ data_fetcher.py         # 差分取得ロジック（yfinance/Futu API）
@@ -248,7 +273,8 @@ def fetch_prices_incremental(symbol: str, lookback_days: int = 90):
 | エージェント | モデル | 役割 |
 |------------|-------|------|
 | Orchestrator | claude-opus-4-6 | 統括・最終判断 |
-| RiskManager | claude-sonnet-4-6 | リスク評価 |
+| StrategyCritic | claude-sonnet-4-6 | 戦略の批判的審査（悪魔の代弁者）★NEW |
+| RiskManager | claude-sonnet-4-6 | リスク評価・ポジションサイズ決定 |
 | MarketScanner / TechnicalAnalyst / BacktestValidator | claude-haiku-4-5 | 軽量処理 |
 
 1日1回実行 → 推定 **$0.05〜$0.15/日**
@@ -281,11 +307,21 @@ def fetch_prices_incremental(symbol: str, lookback_days: int = 90):
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
   │ agents/market_scanner.py     │ Haiku-4.5で軽量スクリーニング + 差分データ取得のトリガー                 │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
-  │ agents/technical_analyst.py  │ Haiku-4.5でMA/RSI/MACD/BB計算 → シグナル生成（DBのみ使用）               │
+  │ agents/technical_analyst.py  │ 全戦略のgenerate_signal()を試し最良シグナルを選定（DBのみ使用）          │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
-  │ agents/backtest_validator.py │ Haiku-4.5でバックテスト（DBキャッシュ7日間優先）                         │
+  │ agents/backtest_validator.py │ 戦略ファイルのbacktest()を使用（DBキャッシュ7日間優先）                  │
+  ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ agents/strategy_critic.py    │ Sonnet-4.6で戦略の弱点を批判的審査（悪魔の代弁者）                      │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
   │ agents/risk_manager.py       │ Sonnet-4.6でポジションサイズ決定・リスク評価                             │
+  ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ strategies/base.py           │ BaseStrategy基底クラス・StrategyRegistry（自動検出・登録）               │
+  ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ strategies/ma_cross.py       │ 移動平均クロス戦略（MA5/MA20ゴールデンクロス）                           │
+  ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ strategies/rsi_oversold.py   │ RSI売られすぎ戦略（RSI30割れからの反発）                                 │
+  ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
+  │ strategies/breakout.py       │ ブレイクアウト戦略（20日高値更新突破）                                   │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
   │ tools/db.py                  │ SQLiteラッパー（全テーブルのCRUD・upsert）                               │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤

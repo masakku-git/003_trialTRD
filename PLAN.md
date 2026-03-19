@@ -259,9 +259,19 @@ def fetch_prices_incremental(symbol: str, lookback_days: int = 90):
 2. 初期設定: SSHユーザ・ufw・rootログイン無効化・JST設定
 3. Futu OpenD インストール + systemdサービス化
 4. Python環境: `venv` + `pip install futu-api yfinance pandas ta python-dotenv`
-5. GitHubからコードデプロイ
-6. `python -c "from tools.db import init_db; init_db()"` でDB初期化
-7. cron設定
+5. Claude CLI インストール（戦略開発・市場分析用）
+   ```bash
+   # Node.js インストール（Claude CLIの前提）
+   curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+   sudo apt-get install -y nodejs
+   # Claude CLI インストール
+   npm install -g @anthropic-ai/claude-code
+   # 認証（初回のみ・ブラウザ不要のAPIキー認証を使用）
+   claude login
+   ```
+6. GitHubからコードデプロイ
+7. `python -c "from tools.db import init_db; init_db()"` でDB初期化
+8. cron設定
 
 ```cron
 45 8 * * 1-5 /home/trading/bot/venv/bin/python /home/trading/bot/main.py >> /home/trading/bot/logs/trading_$(date +\%Y\%m\%d).log 2>&1
@@ -271,7 +281,7 @@ def fetch_prices_incremental(symbol: str, lookback_days: int = 90):
 
 ## 実行方式
 
-**ルールベース（APIキー不要）** — Claude Code Proで戦略を開発・改善し、日次運用はアルゴリズムで自動実行。
+**ルールベース（APIキー不要）** — Hetznerサーバ上のClaude Code（Pro）でDBデータを参照しながら戦略を開発・改善し、日次運用はアルゴリズムで自動実行。
 
 | モジュール | 方式 | 役割 |
 |------------|------|------|
@@ -308,17 +318,17 @@ def fetch_prices_incremental(symbol: str, lookback_days: int = 90):
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
   │ main.py                      │ エントリポイント。--dry-run / --init-db / --scan-only オプション対応     │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
-  │ agents/orchestrator.py       │ Opus-4.6でStep1〜5を統括・最終判断                                       │
+  │ agents/orchestrator.py       │ ルールベースでStep1〜5を統括・最終判断                                    │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
-  │ agents/market_scanner.py     │ Haiku-4.5で軽量スクリーニング + 差分データ取得のトリガー                 │
+  │ agents/market_scanner.py     │ ルールベースで軽量スクリーニング + 差分データ取得のトリガー               │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
   │ agents/technical_analyst.py  │ 全戦略のgenerate_signal()を試し最良シグナルを選定（DBのみ使用）          │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
   │ agents/backtest_validator.py │ 戦略ファイルのbacktest()を使用（DBキャッシュ7日間優先）                  │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
-  │ agents/strategy_critic.py    │ Sonnet-4.6で戦略の弱点を批判的審査（悪魔の代弁者）                      │
+  │ agents/strategy_critic.py    │ ヒューリスティックで戦略の弱点を批判的審査（悪魔の代弁者）              │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
-  │ agents/risk_manager.py       │ Sonnet-4.6でポジションサイズ決定・リスク評価                             │
+  │ agents/risk_manager.py       │ ルールベースでポジションサイズ決定・リスク評価                           │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
   │ strategies/base.py           │ BaseStrategy基底クラス・StrategyRegistry（自動検出・登録）               │
   ├──────────────────────────────┼──────────────────────────────────────────────────────────────────────────┤
